@@ -734,6 +734,7 @@ class TabValidate(QWidget):
         self.cmb_engine = QComboBox()
         self.cmb_engine.addItems(ENGINE_NAMES)
         self.chk_use_all_engines = QCheckBox("Use ALL Engines")
+        self.chk_use_all_engines.toggled.connect(self.on_use_all_engines_toggled)
         engine_row.addWidget(QLabel("Engine:"))
         engine_row.addWidget(self.cmb_engine)
         engine_row.addStretch(1)
@@ -870,6 +871,9 @@ class TabValidate(QWidget):
         self.cmb_filter_result.setCurrentIndex(0)
         self.cmb_filter_engine.setCurrentIndex(0)
         self.txt_filter_search.clear()
+
+    def on_use_all_engines_toggled(self, checked):
+        self.cmb_engine.setEnabled(not checked)
 
     def browse_ipfile(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select IP:Port file", ".", "Text Files (*.txt);;All Files (*)")
