@@ -734,6 +734,7 @@ class TabValidate(QWidget):
         self.cmb_engine = QComboBox()
         self.cmb_engine.addItems(ENGINE_NAMES)
         self.chk_use_all_engines = QCheckBox("Use ALL Engines")
+        self.chk_use_all_engines.toggled.connect(self.on_use_all_engines_toggled)
         engine_row.addWidget(QLabel("Engine:"))
         engine_row.addWidget(self.cmb_engine)
         engine_row.addStretch(1)
@@ -840,6 +841,7 @@ class TabValidate(QWidget):
 
         self._set_btn_states(running=False, paused=False)
         self.update_engine_status()
+        self.on_use_all_engines_toggled(self.chk_use_all_engines.isChecked())
 
     def _colorize(self, btn: QPushButton, bg: str, fg: str = "white"):
         btn.setStyleSheet(f"QPushButton {{ background: {bg}; color: {fg}; padding:6px 12px; border-radius:6px; }}"
@@ -1033,6 +1035,10 @@ class TabValidate(QWidget):
             ok_search = (q == "") or (q in ip.lower() or q in user.lower())
 
             self.table.setRowHidden(r, not (ok_result and ok_engine and ok_search))
+
+    @Slot(bool)
+    def on_use_all_engines_toggled(self, checked: bool):
+        self.cmb_engine.setEnabled(not checked)
 
     @Slot(int)
     def on_header_clicked(self, col: int):
