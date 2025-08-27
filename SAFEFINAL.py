@@ -832,6 +832,9 @@ class TabValidate(QWidget):
         self.txt_filter_search.textChanged.connect(self.apply_filters)
         btn_clear_filters.clicked.connect(self._clear_filters)
 
+        # Disable engine combo when "Use ALL Engines" is checked
+        self.chk_use_all_engines.toggled.connect(self.on_use_all_engines_toggled)
+
         self.bus.table_row.connect(self.add_result_row)
         self.bus.progress.connect(self.progress.setValue)
 
@@ -840,6 +843,8 @@ class TabValidate(QWidget):
 
         self._set_btn_states(running=False, paused=False)
         self.update_engine_status()
+        # Apply initial state for engine combo enablement
+        self.on_use_all_engines_toggled(self.chk_use_all_engines.isChecked())
 
     def _colorize(self, btn: QPushButton, bg: str, fg: str = "white"):
         btn.setStyleSheet(f"QPushButton {{ background: {bg}; color: {fg}; padding:6px 12px; border-radius:6px; }}"
@@ -870,6 +875,9 @@ class TabValidate(QWidget):
         self.cmb_filter_result.setCurrentIndex(0)
         self.cmb_filter_engine.setCurrentIndex(0)
         self.txt_filter_search.clear()
+
+    def on_use_all_engines_toggled(self, checked: bool):
+        self.cmb_engine.setEnabled(not checked)
 
     def browse_ipfile(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select IP:Port file", ".", "Text Files (*.txt);;All Files (*)")
