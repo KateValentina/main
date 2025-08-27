@@ -641,17 +641,19 @@ class ValidationWorker(CancellableWorker):
         if not self.precheck_tcp(ip, port):
             return (False, "NoTCP")
         exe = shutil.which("rdp_check.py") or shutil.which("rdp_check") or shutil.which("impacket-rdpcheck") or shutil.which("impacket-rdp_check")
-        if not exe:
-            self.bus.log.emit("Impacket rdp_check not found in PATH. Install impacket examples.")
-            return (False, "Impacket (tool missing)")
         target = f"{username}:{password}@{ip}:{port}"
-        cmd = [exe, target]
+        if exe:
+            cmd = [exe, target]
+            method = "RDP/Impacket rdp_check"
+        else:
+            # Fallback to python -m impacket.examples.rdpcheck
+            cmd = [sys.executable, "-m", "impacket.examples.rdpcheck", target]
+            method = "RDP/Impacket rdp_check (python -m)"
         timeout_s = max(10, int(self.settings.timeout_ms / 1000) + 10)
         self.bus.log.emit(f"Running Impacket rdp_check: {' '.join(cmd)} (timeout {timeout_s}s)")
         rc, out = self._run_cmd_with_output(cmd, timeout_s)
         out_low = out.lower()
         success = (rc == 0) and ("fail" not in out_low)
-        method = "RDP/Impacket rdp_check"
         if rc == 124:
             method += " (timeout)"
         return (success, method)
@@ -1484,7 +1486,14 @@ def detect_engines() -> Dict[str, str]:
 
     imp = (shutil.which("rdp_check.py") or shutil.which("rdp_check") or
            shutil.which("impacket-rdpcheck") or shutil.which("impacket-rdp_check"))
-    info["Impacket"] = "OK (rdp_check)" if imp else "Missing (install impacket examples)"
+    if imp:
+        info["Impacket"] = "OK (rdp_check)"
+    else:
+        try:
+            __import__("impacket")
+            info["Impacket"] = "OK (python -m)"
+        except Exception:
+            info["Impacket"] = "Missing (install impacket)"
 
     rdpy_cli = shutil.which("rdpy-rdpclient") or shutil.which("rdpy-rdpclient.py")
     if rdpy_cli:
