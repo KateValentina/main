@@ -719,7 +719,19 @@ class ValidationWorker(CancellableWorker):
             if client is None:
                 return (False, "MsRdpClient (COM class not found)")
 
-            client.Server = f"{ip}:{port}"
+            # MsRdpClient expects host in Server and port via AdvancedSettings*.RDPPort
+            client.Server = ip
+            # Set RDP port via the highest available AdvancedSettings interface
+            for adv_name in [
+                'AdvancedSettings9','AdvancedSettings8','AdvancedSettings7','AdvancedSettings6',
+                'AdvancedSettings5','AdvancedSettings4','AdvancedSettings3','AdvancedSettings2','AdvancedSettings'
+            ]:
+                try:
+                    adv = getattr(client, adv_name)
+                    setattr(adv, 'RDPPort', int(port))
+                    break
+                except Exception:
+                    continue
             client.UserName = username
             try:
                 client.AdvancedSettings2.ClearTextPassword = password
