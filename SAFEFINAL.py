@@ -826,6 +826,10 @@ class TabValidate(QWidget):
         self.btn_resume.clicked.connect(self.resume)
         self.btn_stop.clicked.connect(self.stop)
         self.btn_reveal.clicked.connect(self.reveal_selected)
+        # Enable/disable Engine dropdown when "Use ALL Engines" is toggled
+        self.chk_use_all_engines.toggled.connect(self.on_use_all_engines_toggled)
+        # Set initial enabled state
+        self.on_use_all_engines_toggled(self.chk_use_all_engines.isChecked())
 
         self.cmb_filter_result.currentIndexChanged.connect(self.apply_filters)
         self.cmb_filter_engine.currentIndexChanged.connect(self.apply_filters)
@@ -1124,6 +1128,11 @@ class TabValidate(QWidget):
             self._set_btn_states(running=False, paused=False)
             self.progress.setValue(100)
             self.bus.status.emit("Validation finished")
+
+    @Slot(bool)
+    def on_use_all_engines_toggled(self, checked: bool):
+        """Disable Engine combobox when the user opts to use all engines."""
+        self.cmb_engine.setEnabled(not checked)
 
 
 # ------------------------------ Targets & Scan ------------------------------
