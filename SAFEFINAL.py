@@ -556,11 +556,11 @@ class ValidationWorker(CancellableWorker):
         elif engine == "FreeRDP (direct)":
             return self.validate_credential_real(ip, port, username, password, force_direct=True)
         elif engine == "Impacket":
-            return self.validate_impacket_stub(ip, port, username, password)
+            return self.validate_impacket_real(ip, port, username, password)
         elif engine == "RDPY3":
-            return self.validate_rdpy3_stub(ip, port, username, password)
+            return self.validate_rdpy3_real(ip, port, username, password)
         elif engine == "MsRdpClient":
-            return self.validate_msrpclient_stub(ip, port, username, password)
+            return self.validate_msrpclient_real(ip, port, username, password)
         else:
             return (False, f"Unknown engine: {engine}")
 
@@ -628,23 +628,147 @@ class ValidationWorker(CancellableWorker):
 
         return (success, method)
 
-    def validate_impacket_stub(self, ip: str, port: int, username: str, password: str) -> Tuple[bool, str]:
-        if not self.precheck_tcp(ip, port):
-            return (False, "NoTCP")
-        self.bus.log.emit("Impacket engine is in stub mode.")
-        return (False, "Impacket (stub)")
+    def _run_cmd_with_output(self, cmd: List[str], timeout_s: int) -> Tuple[int, str]:
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout_s)
+            return proc.returncode, proc.stdout or ""
+        except subprocess.TimeoutExpired:
+            return 124, "Timeout"
+        except Exception as e:
+            return 1, f"Exception: {e}"
 
-    def validate_rdpy3_stub(self, ip: str, port: int, username: str, password: str) -> Tuple[bool, str]:
+    def validate_impacket_real(self, ip: str, port: int, username: str, password: str) -> Tuple[bool, str]:
         if not self.precheck_tcp(ip, port):
             return (False, "NoTCP")
-        self.bus.log.emit("RDPY3 engine is in stub mode.")
-        return (False, "RDPY3 (stub)")
+        exe = shutil.which("rdp_check.py") or shutil.which("rdp_check") or shutil.which("impacket-rdpcheck") or shutil.which("impacket-rdp_check")
+        target = f"{username}:{password}@{ip}:{port}"
+        if exe:
+            cmd = [exe, target]
+            method = "RDP/Impacket rdp_check"
+        else:
+            # Fallback to python -m impacket.examples.rdpcheck
+            cmd = [sys.executable, "-m", "impacket.examples.rdpcheck", target]
+            method = "RDP/Impacket rdp_check (python -m)"
+        timeout_s = max(10, int(self.settings.timeout_ms / 1000) + 10)
+        self.bus.log.emit(f"Running Impacket rdp_check: {' '.join(cmd)} (timeout {timeout_s}s)")
+        rc, out = self._run_cmd_with_output(cmd, timeout_s)
+        out_low = out.lower()
+        success = (rc == 0) and ("fail" not in out_low)
+        if rc == 124:
+            method += " (timeout)"
+        return (success, method)
 
-    def validate_msrpclient_stub(self, ip: str, port: int, username: str, password: str) -> Tuple[bool, str]:
+    def validate_rdpy3_real(self, ip: str, port: int, username: str, password: str) -> Tuple[bool, str]:
         if not self.precheck_tcp(ip, port):
             return (False, "NoTCP")
-        self.bus.log.emit("MsRdpClient engine is in stub mode.")
-        return (False, "MsRdpClient (stub)")
+        # Prefer CLI client if available
+        exe = shutil.which("rdpy-rdpclient") or shutil.which("rdpy-rdpclient.py")
+        if exe:
+            # Known flags: -u/--username, -p/--password, host[:port]
+            target = f"{ip}:{port}"
+            cmd = [exe, "-u", username, "-p", password, target]
+            timeout_s = max(10, int(self.settings.timeout_ms / 1000) + 10)
+            self.bus.log.emit(f"Running RDPY3 client: {' '.join(cmd)} (timeout {timeout_s}s)")
+            rc, out = self._run_cmd_with_output(cmd, timeout_s)
+            out_low = (out or "").lower()
+            success = (rc == 0) and ("fail" not in out_low and "error" not in out_low)
+            method = "RDP/RDPY3 client"
+            if rc == 124:
+                method += " (timeout)"
+            return (success, method)
+        # Fallback to Python module quick probe if rdpy installed
+        try:
+            import socket as pysock
+            s = pysock.socket(pysock.AF_INET, pysock.SOCK_STREAM)
+            s.settimeout(self.settings.timeout_ms / 1000.0)
+            s.connect((ip, port))
+            s.close()
+            self.bus.log.emit("RDPY3 CLI not found; basic TCP succeeded but cannot fully validate without client.")
+            return (False, "RDPY3 (client missing)")
+        except Exception:
+            return (False, "RDPY3 (connect failed)")
+
+    def validate_msrpclient_real(self, ip: str, port: int, username: str, password: str) -> Tuple[bool, str]:
+        if not self.precheck_tcp(ip, port):
+            return (False, "NoTCP")
+        try:
+            import platform
+            if platform.system().lower() != "windows":
+                return (False, "MsRdpClient (Windows-only)")
+            import pythoncom  # type: ignore
+            import win32com.client  # type: ignore
+        except Exception:
+            return (False, "MsRdpClient (pywin32 missing)")
+
+        try:
+            pythoncom.CoInitialize()
+            prog_ids = [
+                'MsTscAx.MsRdpClient10',
+                'MsTscAx.MsRdpClient9',
+                'MsTscAx.MsRdpClient8',
+                'MsTscAx.MsRdpClient7',
+                'MsTscAx.MsTscAx',
+            ]
+            client = None
+            for pid in prog_ids:
+                try:
+                    client = win32com.client.Dispatch(pid)
+                    break
+                except Exception:
+                    continue
+            if client is None:
+                return (False, "MsRdpClient (COM class not found)")
+
+            # MsRdpClient expects host in Server and port via AdvancedSettings*.RDPPort
+            client.Server = ip
+            # Set RDP port via the highest available AdvancedSettings interface
+            for adv_name in [
+                'AdvancedSettings9','AdvancedSettings8','AdvancedSettings7','AdvancedSettings6',
+                'AdvancedSettings5','AdvancedSettings4','AdvancedSettings3','AdvancedSettings2','AdvancedSettings'
+            ]:
+                try:
+                    adv = getattr(client, adv_name)
+                    setattr(adv, 'RDPPort', int(port))
+                    break
+                except Exception:
+                    continue
+            client.UserName = username
+            try:
+                client.AdvancedSettings2.ClearTextPassword = password
+            except Exception:
+                try:
+                    client.AdvancedSettings.ClearTextPassword = password
+                except Exception:
+                    return (False, "MsRdpClient (no ClearTextPassword)")
+
+            try:
+                client.Connect()
+            except Exception as e:
+                return (False, f"MsRdpClient (connect error: {e})")
+
+            t0 = time.time()
+            timeout_s = max(10, int(self.settings.timeout_ms / 1000) + 15)
+            connected = False
+            while time.time() - t0 < timeout_s:
+                try:
+                    if getattr(client, 'Connected', 0) == 1:
+                        connected = True
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.3)
+
+            try:
+                client.Disconnect()
+            except Exception:
+                pass
+
+            return (connected, "RDP/MsRdpClient COM")
+        finally:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
 
     def run(self):
         try:
@@ -832,6 +956,9 @@ class TabValidate(QWidget):
         self.txt_filter_search.textChanged.connect(self.apply_filters)
         btn_clear_filters.clicked.connect(self._clear_filters)
 
+        # Disable engine combo when "Use ALL Engines" is checked
+        self.chk_use_all_engines.toggled.connect(self.on_use_all_engines_toggled)
+
         self.bus.table_row.connect(self.add_result_row)
         self.bus.progress.connect(self.progress.setValue)
 
@@ -840,6 +967,8 @@ class TabValidate(QWidget):
 
         self._set_btn_states(running=False, paused=False)
         self.update_engine_status()
+        # Apply initial state for engine combo enablement
+        self.on_use_all_engines_toggled(self.chk_use_all_engines.isChecked())
 
     def _colorize(self, btn: QPushButton, bg: str, fg: str = "white"):
         btn.setStyleSheet(f"QPushButton {{ background: {bg}; color: {fg}; padding:6px 12px; border-radius:6px; }}"
@@ -870,6 +999,9 @@ class TabValidate(QWidget):
         self.cmb_filter_result.setCurrentIndex(0)
         self.cmb_filter_engine.setCurrentIndex(0)
         self.txt_filter_search.clear()
+
+    def on_use_all_engines_toggled(self, checked: bool):
+        self.cmb_engine.setEnabled(not checked)
 
     def browse_ipfile(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select IP:Port file", ".", "Text Files (*.txt);;All Files (*)")
@@ -1364,14 +1496,26 @@ def detect_engines() -> Dict[str, str]:
         docker_ok = False
     info["PyRDP+FreeRDP"] = "OK (native)" if native else ("OK (via Docker)" if docker_ok else "Missing (no pyrdp, no Docker)")
 
-    imp = shutil.which("rdp_check.py") or shutil.which("rdp_check")
-    info["Impacket"] = "Found rdp_check" if imp else "Missing (rdp_check)"
+    imp = (shutil.which("rdp_check.py") or shutil.which("rdp_check") or
+           shutil.which("impacket-rdpcheck") or shutil.which("impacket-rdp_check"))
+    if imp:
+        info["Impacket"] = "OK (rdp_check)"
+    else:
+        try:
+            __import__("impacket")
+            info["Impacket"] = "OK (python -m)"
+        except Exception:
+            info["Impacket"] = "Missing (install impacket)"
 
-    try:
-        __import__("rdpy")
-        info["RDPY3"] = "OK (rdpy module)"
-    except Exception:
-        info["RDPY3"] = "Missing (pip install rdpy)"
+    rdpy_cli = shutil.which("rdpy-rdpclient") or shutil.which("rdpy-rdpclient.py")
+    if rdpy_cli:
+        info["RDPY3"] = "OK (rdpy-rdpclient)"
+    else:
+        try:
+            __import__("rdpy")
+            info["RDPY3"] = "OK (rdpy module)"
+        except Exception:
+            info["RDPY3"] = "Missing (pip install rdpy)"
 
     try:
         import platform
