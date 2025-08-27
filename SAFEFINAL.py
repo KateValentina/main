@@ -826,6 +826,7 @@ class TabValidate(QWidget):
         self.btn_resume.clicked.connect(self.resume)
         self.btn_stop.clicked.connect(self.stop)
         self.btn_reveal.clicked.connect(self.reveal_selected)
+        self.chk_use_all_engines.toggled.connect(self.on_use_all_engines_toggled)
 
         self.cmb_filter_result.currentIndexChanged.connect(self.apply_filters)
         self.cmb_filter_engine.currentIndexChanged.connect(self.apply_filters)
@@ -840,6 +841,7 @@ class TabValidate(QWidget):
 
         self._set_btn_states(running=False, paused=False)
         self.update_engine_status()
+        self.on_use_all_engines_toggled(self.chk_use_all_engines.isChecked())
 
     def _colorize(self, btn: QPushButton, bg: str, fg: str = "white"):
         btn.setStyleSheet(f"QPushButton {{ background: {bg}; color: {fg}; padding:6px 12px; border-radius:6px; }}"
@@ -1111,6 +1113,9 @@ class TabValidate(QWidget):
             self.bus.status.emit("Credentials saved to disk")
         except Exception as e:
             QMessageBox.warning(self, "Save error", f"Could not save revealed credential: {e}")
+
+    def on_use_all_engines_toggled(self, checked):
+        self.cmb_engine.setEnabled(not checked)
 
     def update_engine_status(self):
         states = detect_engines()
